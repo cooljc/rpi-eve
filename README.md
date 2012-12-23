@@ -1,4 +1,4 @@
 rpi-eve
 =======
 
-Collection of kernel modules and example code to the Raspberry Pi EVE Alpha Board
+Collection of kernel modules and example code for the Raspberry Pi EVE Alpha Board

@@ -24,5 +24,5 @@ clean:
 
 else
     # called from kernel build system: just declare what our modules are
-    obj-m := tmp100.o
+    obj-m := tmp10x.o
 endif

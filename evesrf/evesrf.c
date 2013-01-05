@@ -29,6 +29,8 @@
 #include <linux/cdev.h>
 #include <linux/spi/spi.h>
 #include <linux/string.h>
+#include <linux/irq.h>
+#include <linux/gpio.h>
 #include <asm/uaccess.h>
 
 #define USER_BUFF_SIZE	128
@@ -55,7 +57,8 @@
 /* ------------------------------------------------------------------ */
 /* enable debugging messages */
 static int debug = 1;
-
+/* set the default GPIO irq pin */
+static int gpio_irq_pin = 25;
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
@@ -68,6 +71,10 @@ struct evesrf_dev_s {
   struct cdev cdev;
   struct class *class;
   struct spi_device *spi_device;
+  struct gpio_chip *gpiochip;
+  struct irq_chip *irqchip;
+  struct irq_data *irqdata;
+  int irq_num;
   char *user_buff;
 };
 
@@ -169,6 +176,47 @@ static int evesrf_remove(struct spi_device *spi_device)
   return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static int is_right_chip(struct gpio_chip *chip, void *data)
+{
+  dprintk("is_right_chip %s %d\n", chip->label, 
+	  strcmp(data, chip->label));
+
+  if (strcmp(data, chip->label) == 0)
+    return 1;
+  return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static int __init evesrf_init_gpio_irq (void)
+{
+  int ret = 0;
+
+  evesrf_dev.gpiochip = gpiochip_find("bcm2708_gpio", is_right_chip);
+
+  if (!evesrf_dev.gpiochip)
+    return -ENODEV;
+
+  if (gpio_request(gpio_irq_pin, EVESRF_DRIVER_NAME " evesrf/irq")) {
+    dprintk("cant claim gpio pin %d\n", gpio_irq_pin);
+    ret = -ENODEV;
+    goto exit_init_gpio_irq;
+  }
+
+  /* set GPIO direction */
+  evesrf_dev.gpiochip->direction_input(evesrf_dev.gpiochip, gpio_irq_pin);
+
+  /* Setup IRQ */
+  evesrf_dev.irq_num = evesrf_dev.gpiochip->to_irq(evesrf_dev.gpiochip, 
+						   gpio_irq_pin);
+  dprintk("to_irq %d\n", evesrf_dev.irq_num);
+  evesrf_dev.irqdata = irq_get_irq_data(evesrf_dev.irq_num);
+
+ exit_init_gpio_irq:
+  return ret;
+}
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
@@ -222,7 +270,7 @@ static int __init evesrf_add_device_to_bus(void)
     spi_device->max_speed_hz = SPI_BUS_SPEED;
     spi_device->mode = SPI_MODE_0;
     spi_device->bits_per_word = 8;
-    spi_device->irq = -1;
+    spi_device->irq = evesrf_dev.irq_num;
     spi_device->controller_state = NULL;
     spi_device->controller_data = NULL;
     strlcpy (spi_device->modalias, this_driver_name, SPI_NAME_SIZE);
@@ -346,10 +394,18 @@ static int __init evesrf_init(void)
   if (evesrf_init_class() < 0)  
     goto fail_2;
 
-  if (evesrf_init_spi() < 0) 
+  if (evesrf_init_gpio_irq() < 0)
     goto fail_3;
 
+  if (evesrf_init_spi() < 0) 
+    goto fail_4;
+
+  
+
   return 0;
+
+ fail_4:
+  gpio_free(gpio_irq_pin);
 
  fail_3:
   device_destroy(evesrf_dev.class, evesrf_dev.devt);
@@ -370,6 +426,8 @@ static void __exit evesrf_exit(void)
 {
   spi_unregister_device(evesrf_dev.spi_device);
   spi_unregister_driver(&evesrf_driver);
+  
+  gpio_free(gpio_irq_pin);
 
   device_destroy(evesrf_dev.class, evesrf_dev.devt);
   class_destroy(evesrf_dev.class);
@@ -390,3 +448,8 @@ MODULE_LICENSE("GPL");
 
 module_param(debug, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(debug, "Enable debugging messages");
+
+module_param(gpio_irq_pin, int, S_IRUGO);
+MODULE_PARM_DESC(gpio_irq_pin, "GPIO irq pin number of the BCM processor."
+		 " Valid pin numbers are: 0, 1, 4, 8, 7, 9, 10, 11, 14, 15,"
+		 " 17, 18, 21, 22, 23, 24, 25, default 25");

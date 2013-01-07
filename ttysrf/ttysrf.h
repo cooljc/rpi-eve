@@ -24,6 +24,7 @@
 #define _TTYSRF_H
 
 #define TTYSRF_DRIVER_NAME  "ttysrf"
+#define TTYSRF_MINORS       1
 
 
 #endif /* #ifndef _TTYSRF_H */

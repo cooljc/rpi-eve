@@ -24,6 +24,10 @@
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/tty.h>
+#include <linux/tty_driver.h>
+#include <linux/tty_flip.h>
+#include <linux/serial.h>
 
 #include "ttysrf.h"
 
@@ -44,6 +48,93 @@
 /* enable debugging messages */
 static int debug = 1;
 
+static struct tty_driver *ttysrf_driver;
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static int ttysrf_open(struct tty_struct *tty, struct file *file)
+{
+  return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static void ttysrf_close(struct tty_struct *tty, struct file *file)
+{
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static int ttysrf_write(struct tty_struct *tty, 
+			const unsigned char *buffer, int count)
+{
+  return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static int ttysrf_write_room(struct tty_struct *tty) 
+{
+  return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static void ttysrf_set_termios(struct tty_struct *tty, 
+			       struct ktermios *old_termios)
+{
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static struct tty_operations ttysrf_serial_ops = {
+  .open = ttysrf_open,
+  .close = ttysrf_close,
+  .write = ttysrf_write,
+  .write_room = ttysrf_write_room,
+  .set_termios = ttysrf_set_termios,
+};
+
+/* ------------------------------------------------------------------ */
+/* ttysrf_init_tty()
+ * This function is used to setup the tty device. */
+/* ------------------------------------------------------------------ */
+static int __init ttysrf_init_tty (void)
+{
+  int ret = 0;
+
+  /* allocate memory for tty driver. */
+  ttysrf_driver = alloc_tty_driver (TTYSRF_MINORS);
+  if (!ttysrf_driver) {
+    dprintk ("Failed to allocate memory for ttysrf driver!\n");
+    return -ENOMEM;
+  }
+
+  /* initialize the tty driver */
+  ttysrf_driver->owner = THIS_MODULE;
+  ttysrf_driver->driver_name = TTYSRF_DRIVER_NAME;
+  ttysrf_driver->name = "ttySRF";
+  ttysrf_driver->minor_start = TTYSRF_MINORS;
+  ttysrf_driver->num = TTYSRF_MINORS;
+  ttysrf_driver->type = TTY_DRIVER_TYPE_SERIAL;
+  ttysrf_driver->subtype = SERIAL_TYPE_NORMAL;
+  ttysrf_driver->flags = TTY_DRIVER_REAL_RAW;
+  ttysrf_driver->init_termios = tty_std_termios;
+  tty_set_operations(ttysrf_driver, &ttysrf_serial_ops);
+
+  /* register the tty driver */
+  ret = tty_register_driver(ttysrf_driver);
+  if (ret) {
+    dprintk("failed to register ttysrf driver");
+    put_tty_driver(ttysrf_driver);
+    return ret;
+  }
+
+  /* register device */
+  tty_register_device(ttysrf_driver, 0, NULL);
+
+  return ret;
+}
 
 /* ------------------------------------------------------------------ */
 /* ttysrf_init()
@@ -51,8 +142,13 @@ static int debug = 1;
 /* ------------------------------------------------------------------ */
 static int __init ttysrf_init (void)
 {
+  int ret = 0;
+
   dprintk ("%s()\n", __func__);
-  return 0;
+
+  ret = ttysrf_init_tty ();
+
+  return ret;
 }
 module_init (ttysrf_init);
 
@@ -63,6 +159,10 @@ module_init (ttysrf_init);
 static void __exit ttysrf_exit (void)
 {
    dprintk ("%s()\n", __func__);
+
+   tty_unregister_device(ttysrf_driver, 0);
+   tty_unregister_driver(ttysrf_driver);
+
 }
 module_exit (ttysrf_exit);
 

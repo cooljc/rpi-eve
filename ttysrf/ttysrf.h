@@ -26,6 +26,12 @@
 #define TTYSRF_DRIVER_NAME  "ttysrf"
 #define TTYSRF_MINORS       1
 
+struct ttysrf_serial {
+  struct tty_struct *tty;  /* pointer to the tty for this device */
+  struct device *tty_dev;
+  int open_count;          /* number of times this port has been opened */
+  struct semaphore sem;    /* locks this structure */
+};
 
 #endif /* #ifndef _TTYSRF_H */
 /* EOF */

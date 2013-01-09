@@ -28,6 +28,7 @@
 #include <linux/tty_driver.h>
 #include <linux/tty_flip.h>
 #include <linux/serial.h>
+#include <linux/slab.h>
 
 #include "ttysrf.h"
 
@@ -48,12 +49,28 @@
 /* enable debugging messages */
 static int debug = 1;
 
-static struct tty_driver *ttysrf_driver;
+static struct tty_driver *ttysrf_driver = NULL;
+static struct ttysrf_serial *ttysrf_saved = NULL;
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
 static int ttysrf_open(struct tty_struct *tty, struct file *file)
 {
+  if (!ttysrf_saved)
+    return -ENOMEM;
+
+  down (&ttysrf_saved->sem);
+
+  /* save our structure within the tty structure */
+  tty->driver_data = ttysrf_saved;
+  ttysrf_saved->tty = tty;
+  ++ttysrf_saved->open_count;
+  if (ttysrf_saved->open_count == 1) {
+    /* this is the first time this port is opened */
+    /* do any hardware initialization needed here */
+  }
+  up (&ttysrf_saved->sem);
+
   return 0;
 }
 
@@ -61,6 +78,21 @@ static int ttysrf_open(struct tty_struct *tty, struct file *file)
 /* ------------------------------------------------------------------ */
 static void ttysrf_close(struct tty_struct *tty, struct file *file)
 {
+  struct ttysrf_serial *ttysrf = tty->driver_data;
+  down (&ttysrf->sem);
+  if (!ttysrf->open_count) {
+    /* port was never opened */
+    goto exit;
+  }
+
+  --ttysrf->open_count;
+  if (ttysrf->open_count <= 0) {
+    /* The port is being closed by the last user. */
+    /* Do any hardware specific stuff here */
+  }
+
+ exit:
+  up (&ttysrf->sem);
 }
 
 /* ------------------------------------------------------------------ */
@@ -68,14 +100,41 @@ static void ttysrf_close(struct tty_struct *tty, struct file *file)
 static int ttysrf_write(struct tty_struct *tty, 
 			const unsigned char *buffer, int count)
 {
-  return 0;
+  struct ttysrf_serial *ttysrf = tty->driver_data;
+
+  down (&ttysrf->sem);
+
+  /* echo data back */
+  tty_insert_flip_string(tty, buffer, count);
+  tty_flip_buffer_push(tty);
+
+  up (&ttysrf->sem);
+  return count;
 }
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
 static int ttysrf_write_room(struct tty_struct *tty) 
 {
-  return 0;
+  struct ttysrf_serial *ttysrf = tty->driver_data;
+  int room = -EINVAL;
+
+  if (!ttysrf)
+    return -ENODEV;
+
+  down(&ttysrf->sem);
+
+  if (!ttysrf->open_count) {
+    /* port was not opened */
+    goto exit;
+  }
+
+  /* calculate how much room is left in the device */
+  room = 255;
+
+ exit:
+  up(&ttysrf->sem);
+  return room;
 }
 
 /* ------------------------------------------------------------------ */
@@ -99,11 +158,12 @@ static struct tty_operations ttysrf_serial_ops = {
 /* ttysrf_init_tty()
  * This function is used to setup the tty device. */
 /* ------------------------------------------------------------------ */
-static int __init ttysrf_init_tty (void)
+static int __init ttysrf_init_tty (struct ttysrf_serial *ttysrf)
 {
   int ret = 0;
 
   /* allocate memory for tty driver. */
+  //ttysrf_driver = tty_alloc_driver (TTYSRF_MINORS, TTY_DRIVER_UNNUMBERED_NODE);
   ttysrf_driver = alloc_tty_driver (TTYSRF_MINORS);
   if (!ttysrf_driver) {
     dprintk ("Failed to allocate memory for ttysrf driver!\n");
@@ -118,7 +178,7 @@ static int __init ttysrf_init_tty (void)
   ttysrf_driver->num = TTYSRF_MINORS;
   ttysrf_driver->type = TTY_DRIVER_TYPE_SERIAL;
   ttysrf_driver->subtype = SERIAL_TYPE_NORMAL;
-  ttysrf_driver->flags = TTY_DRIVER_REAL_RAW;
+  ttysrf_driver->flags = TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
   ttysrf_driver->init_termios = tty_std_termios;
   tty_set_operations(ttysrf_driver, &ttysrf_serial_ops);
 
@@ -131,7 +191,7 @@ static int __init ttysrf_init_tty (void)
   }
 
   /* register device */
-  tty_register_device(ttysrf_driver, 0, NULL);
+  ttysrf->tty_dev = tty_register_device(ttysrf_driver, 0, NULL);
 
   return ret;
 }
@@ -143,11 +203,26 @@ static int __init ttysrf_init_tty (void)
 static int __init ttysrf_init (void)
 {
   int ret = 0;
+  struct ttysrf_serial *ttysrf = NULL;
 
   dprintk ("%s()\n", __func__);
 
-  ret = ttysrf_init_tty ();
+  /* allocate memory for ttysrf structure */
+  ttysrf = kmalloc(sizeof(*ttysrf), GFP_KERNEL);
+  if (!ttysrf)
+    return -ENOMEM;
+  sema_init(&ttysrf->sem, 1);
+  ttysrf->open_count = 0;
 
+  ret = ttysrf_init_tty (ttysrf);
+  if (ret < 0)
+    goto error;
+
+  ttysrf_saved = ttysrf;
+  return ret;
+ error:
+  /* free structure */
+  kfree(ttysrf);
   return ret;
 }
 module_init (ttysrf_init);
@@ -162,7 +237,7 @@ static void __exit ttysrf_exit (void)
 
    tty_unregister_device(ttysrf_driver, 0);
    tty_unregister_driver(ttysrf_driver);
-
+   kfree(ttysrf_saved);
 }
 module_exit (ttysrf_exit);
 

@@ -29,9 +29,11 @@
 /* SPI defines */
 #define TTYSRF_SPI_BUS       0
 #define TTYSRF_SPI_BUS_CS0   0
-#define TTYSRF_SPI_BUS_SPEED 1000000
+#define TTYSRF_SPI_BUS_SPEED 100000
 
 #define TTYSRF_FIFO_SIZE     4096
+#define TTYSRF_SPI_TX_SIZE   TTYSRF_FIFO_SIZE
+#define TTYSRF_SPI_RX_SIZE   TTYSRF_SPI_TX_SIZE
 
 struct ttysrf_serial {
   /* our SPI device */
@@ -43,6 +45,12 @@ struct ttysrf_serial {
   spinlock_t fifo_lock;
   unsigned int signal_state;
   unsigned char *tx_buffer;
+  unsigned char *rx_buffer;
+  int tx_len;
+  int rx_len;
+  struct spi_message spi_msg;
+  struct spi_transfer spi_xfer;
+  int spi_busy;
 
   /* TTY Layer logic */
   struct tty_port tty_port;

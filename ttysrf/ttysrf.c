@@ -61,37 +61,114 @@ static struct lock_class_key ttysrf_spi_key;
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
+static void ttysrf_spi_complete (void *arg)
+{
+  struct ttysrf_serial *ttysrf = arg;
+  struct tty_struct *tty;
+  unsigned char *rx_buffer;
+  int loop = 0;
+
+  down(&ttysrf->sem);
+
+  tty  = tty_port_tty_get(&ttysrf->tty_port);
+  rx_buffer = ttysrf->rx_buffer;
+
+  /* TODO: process data (fe ff) */
+  for (loop=0; loop<ttysrf->tx_len; loop++) {
+    if (rx_buffer[loop] == 0xfe) {
+    }
+    else if (rx_buffer[loop] == 0xff) {
+    }
+    else {
+      tty_insert_flip_char (tty, rx_buffer[loop], TTY_NORMAL);
+    }
+    //    tty_insert_flip_string(tty, rx_buffer, temp_count);
+  }
+  tty_flip_buffer_push(tty);
+  tty_kref_put(tty);
+
+  ttysrf->spi_busy = 0;
+  up (&ttysrf->sem);
+
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static int ttysrf_spi_send_msg (struct ttysrf_serial *ttysrf)
+{
+  int status;
+
+  spi_message_init(&ttysrf->spi_msg);
+
+  /* this gets called when the spi_message completes */
+  ttysrf->spi_msg.complete = ttysrf_spi_complete;
+  ttysrf->spi_msg.context = ttysrf;
+
+  /* setup transfer buffers and length */
+  ttysrf->spi_xfer.tx_buf = ttysrf->tx_buffer;
+  ttysrf->spi_xfer.rx_buf = ttysrf->rx_buffer;
+  ttysrf->spi_xfer.len = ttysrf->tx_len;
+
+  spi_message_add_tail(&ttysrf->spi_xfer, &ttysrf->spi_msg);
+
+  /* TODO: spin lock?? */
+  if (ttysrf->spi_dev)
+    status = spi_async(ttysrf->spi_dev, &ttysrf->spi_msg);
+  else
+    status = -ENODEV;
+  /* TODO: spin unlock ?? */
+
+  if (status == 0) {
+    down(&ttysrf->sem);
+    ttysrf->spi_busy = 1;
+    up (&ttysrf->sem);
+  }
+
+  return status;
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
 static int ttysrf_spi_thread (void *arg)
 {
   struct ttysrf_serial *ttysrf = arg;
-
+  int status = 0;
+  int isBusy = 0;
   do {
     int tx_fifo_len = kfifo_len(&ttysrf->tx_fifo);
     int temp_count = 0;
 
-    if (tx_fifo_len) {
-      struct tty_struct *tty = tty_port_tty_get(&ttysrf->tty_port);
-      unsigned char *tx_buffer = ttysrf->tx_buffer;
+    down(&ttysrf->sem);
+    isBusy = ttysrf->spi_busy;
+    up (&ttysrf->sem);
 
-      /*get data from tx_fifo */
-      temp_count = kfifo_out_locked(&ttysrf->tx_fifo,
-				    tx_buffer, TTYSRF_FIFO_SIZE,
-				    &ttysrf->fifo_lock);
-      /* TODO: mode this to SPI message proccess below */
-      /* send data */
-      tty_insert_flip_string(tty, tx_buffer, temp_count);
-      tty_flip_buffer_push(tty);
-      tty_kref_put(tty);
-    }
-    else if ( gpio_get_value(ttysrf->gpio.irq_pin) ) {
-      /* TODO: Construct SPI message to read 1 byte */
-      dprintk ("%s() irq_pin HIGH!\n", __func__);
+    if (isBusy == 0) {
+      if (tx_fifo_len) {
+	unsigned char *tx_buffer = ttysrf->tx_buffer;
+
+	/*get data from tx_fifo */
+	ttysrf->tx_len = kfifo_out_locked(&ttysrf->tx_fifo,
+				      tx_buffer, TTYSRF_FIFO_SIZE,
+				      &ttysrf->fifo_lock);
+	/* TODO: format tx_buffer for "fe ff" */
+	status = ttysrf_spi_send_msg (ttysrf);
+      }
+      else if ( gpio_get_value(ttysrf->gpio.irq_pin) ) {
+	/* Construct SPI message to read 1 byte */
+	ttysrf->tx_buffer[0] = 0xff;
+	ttysrf->tx_len = 1;
+	ttysrf_spi_send_msg (ttysrf);
+      }
+      else {
+	set_current_state(TASK_INTERRUPTIBLE);
+	schedule_timeout(usecs_to_jiffies(10000));
+      }
     }
     else {
+      /* delay a short time to wait for transfer to complete */
       set_current_state(TASK_INTERRUPTIBLE);
-      schedule_timeout(usecs_to_jiffies(10000));
+      schedule_timeout(usecs_to_jiffies(100));
     }
-    /* TODO: process SPI Message */
   } while (!kthread_should_stop());
 
   return 0;
@@ -212,6 +289,7 @@ static void ttysrf_free_port(struct ttysrf_serial *ttysrf)
     tty_unregister_device(ttysrf_tty_driver, ttysrf->minor);
   kfifo_free(&ttysrf->tx_fifo);
   kfree (ttysrf->tx_buffer);
+  kfree (ttysrf->rx_buffer);
   kfree (ttysrf);
 }
 
@@ -275,8 +353,16 @@ static int ttysrf_spi_probe(struct spi_device *spi)
     return -ENOMEM;
 
   /* allocate memory for transmit buffer */
-  ttysrf->tx_buffer = kzalloc (TTYSRF_FIFO_SIZE, GFP_KERNEL);
+  ttysrf->tx_buffer = kzalloc (TTYSRF_SPI_TX_SIZE, GFP_KERNEL);
   if (!ttysrf->tx_buffer) {
+    kfree (ttysrf);
+    return -ENOMEM;
+  }
+
+  /* allocate memory for receive buffer */
+  ttysrf->rx_buffer = kzalloc (TTYSRF_SPI_RX_SIZE, GFP_KERNEL);
+  if (!ttysrf->rx_buffer) {
+    kfree (ttysrf->tx_buffer);
     kfree (ttysrf);
     return -ENOMEM;
   }
@@ -284,6 +370,7 @@ static int ttysrf_spi_probe(struct spi_device *spi)
   sema_init(&ttysrf->sem, 1);
   ttysrf->open_count = 0;
   ttysrf->spi_dev = spi;
+  ttysrf->spi_busy = 0;
   ttysrf->gpio.irq_pin = gpio_irq_pin;
 
 

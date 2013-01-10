@@ -36,6 +36,13 @@
 struct ttysrf_serial {
   /* our SPI device */
   struct spi_device *spi_dev;
+  struct task_struct *spi_task;
+
+  /* port specific data */
+  struct kfifo tx_fifo;
+  spinlock_t fifo_lock;
+  unsigned int signal_state;
+  unsigned char *tx_buffer;
 
   /* TTY Layer logic */
   struct tty_port tty_port;

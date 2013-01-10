@@ -30,6 +30,8 @@
 #include <linux/serial.h>
 #include <linux/slab.h>
 #include <linux/spi/spi.h>
+#include <linux/kfifo.h>
+#include <linux/kthread.h>
 
 #include "ttysrf.h"
 
@@ -52,6 +54,40 @@ static int debug = 1;
 
 static struct tty_driver *ttysrf_tty_driver = NULL;
 static struct ttysrf_serial *ttysrf_saved = NULL;
+static struct lock_class_key ttysrf_spi_key;
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static int ttysrf_spi_thread (void *arg)
+{
+  struct ttysrf_serial *ttysrf = arg;
+
+  do {
+    int tx_fifo_len = kfifo_len(&ttysrf->tx_fifo);
+    int temp_count = 0;
+
+    if (tx_fifo_len) {
+      struct tty_struct *tty = tty_port_tty_get(&ttysrf->tty_port);
+      unsigned char *tx_buffer = ttysrf->tx_buffer;
+
+      /* get data from tx_fifo */
+      temp_count = kfifo_out_locked(&ttysrf->tx_fifo,
+				    tx_buffer, TTYSRF_FIFO_SIZE,
+				    &ttysrf->fifo_lock);
+      /* send data */
+      tty_insert_flip_string(tty, tx_buffer, temp_count);
+      tty_flip_buffer_push(tty);
+      tty_kref_put(tty);
+    }
+    else {
+      set_current_state(TASK_INTERRUPTIBLE);
+      schedule_timeout(usecs_to_jiffies(10000));
+    }
+  } while (!kthread_should_stop());
+
+  return 0;
+}
+
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
@@ -75,15 +111,14 @@ static int ttysrf_write(struct tty_struct *tty,
 			const unsigned char *buffer, int count)
 {
   struct ttysrf_serial *ttysrf = tty->driver_data;
+  unsigned char *tmp_buf = (unsigned char *)buffer;
+  int tx_count = kfifo_in_locked(&ttysrf->tx_fifo, tmp_buf, count,
+				 &ttysrf->fifo_lock);
+  /* poke tasklet to process data */
+  /* wake up thread */
+  wake_up_process(ttysrf->spi_task);
 
-  down (&ttysrf->sem);
-
-  /* echo data back */
-  tty_insert_flip_string(tty, buffer, count);
-  tty_flip_buffer_push(tty);
-
-  up (&ttysrf->sem);
-  return count;
+  return tx_count;
 }
 
 /* ------------------------------------------------------------------ */
@@ -93,21 +128,8 @@ static int ttysrf_write_room(struct tty_struct *tty)
   struct ttysrf_serial *ttysrf = tty->driver_data;
   int room = -EINVAL;
 
-  if (!ttysrf)
-    return -ENODEV;
-
-  down(&ttysrf->sem);
-
-  if (!ttysrf->open_count) {
-    /* port was not opened */
-    goto exit;
-  }
-
   /* calculate how much room is left in the device */
-  room = 255;
-
- exit:
-  up(&ttysrf->sem);
+  room = TTYSRF_FIFO_SIZE - kfifo_len(&ttysrf->tx_fifo);
   return room;
 }
 
@@ -127,11 +149,21 @@ static int ttysrf_port_activate(struct tty_port *port, struct tty_struct *tty)
 
   dprintk ("%s()\n", __func__);
 
+  /* clear any old data; can't do this in 'close' */
+  kfifo_reset(&ttysrf->tx_fifo);
+
   /* put port data into this tty */
   tty->driver_data = ttysrf;
 
   /* allows flip string push from int context */
   tty->low_latency = 1;
+
+  /* start thread */
+  ttysrf->spi_task = kthread_run(ttysrf_spi_thread, ttysrf, TTYSRF_DRIVER_NAME);
+  if (IS_ERR(ttysrf->spi_task)) {
+    dprintk("cannot run ttysrf_spi_thread\n");
+    return -ECHILD;
+  }
 
   return 0;
 }
@@ -142,9 +174,10 @@ static void ttysrf_port_shutdown(struct tty_port *port)
 {
   struct ttysrf_serial *ttysrf =
     container_of(port, struct ttysrf_serial, tty_port);
-  ttysrf = ttysrf; /* prevent warning */
   dprintk ("%s()\n", __func__);
+
   /* stop threads, interrupts etc.. */
+  kthread_stop(ttysrf->spi_task);
 }
 
 /* ------------------------------------------------------------------ */
@@ -168,6 +201,8 @@ static void ttysrf_free_port(struct ttysrf_serial *ttysrf)
 {
   if (ttysrf->tty_dev)
     tty_unregister_device(ttysrf_tty_driver, ttysrf->minor);
+  kfifo_free(&ttysrf->tx_fifo);
+  kfree (ttysrf->tx_buffer);
   kfree (ttysrf);
 }
 
@@ -178,6 +213,15 @@ static int ttysrf_create_port(struct ttysrf_serial *ttysrf)
 {
   int ret = 0;
   struct tty_port *pport = &ttysrf->tty_port;
+
+  spin_lock_init(&ttysrf->fifo_lock);
+  lockdep_set_class_and_subclass(&ttysrf->fifo_lock,
+				 &ttysrf_spi_key, 0);
+
+  if (kfifo_alloc(&ttysrf->tx_fifo, TTYSRF_FIFO_SIZE, GFP_KERNEL)) {
+    ret = -ENOMEM;
+    goto error_ret;
+  }
 
   tty_port_init(pport);
   pport->ops = &ttysrf_tty_port_ops;
@@ -220,6 +264,14 @@ static int ttysrf_spi_probe(struct spi_device *spi)
   ttysrf = kzalloc(sizeof(*ttysrf), GFP_KERNEL);
   if (!ttysrf)
     return -ENOMEM;
+
+  /* allocate memory for transmit buffer */
+  ttysrf->tx_buffer = kzalloc (TTYSRF_FIFO_SIZE, GFP_KERNEL);
+  if (!ttysrf->tx_buffer) {
+    kfree (ttysrf);
+    return -ENOMEM;
+  }
+
   sema_init(&ttysrf->sem, 1);
   ttysrf->open_count = 0;
   ttysrf->spi_dev = spi;

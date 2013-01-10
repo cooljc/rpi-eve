@@ -32,6 +32,7 @@
 #include <linux/spi/spi.h>
 #include <linux/kfifo.h>
 #include <linux/kthread.h>
+#include <linux/gpio.h>
 
 #include "ttysrf.h"
 
@@ -51,6 +52,8 @@
 /* ------------------------------------------------------------------ */
 /* enable debugging messages */
 static int debug = 1;
+/* set the default GPIO irq pin */
+static int gpio_irq_pin = 25;
 
 static struct tty_driver *ttysrf_tty_driver = NULL;
 static struct ttysrf_serial *ttysrf_saved = NULL;
@@ -70,19 +73,25 @@ static int ttysrf_spi_thread (void *arg)
       struct tty_struct *tty = tty_port_tty_get(&ttysrf->tty_port);
       unsigned char *tx_buffer = ttysrf->tx_buffer;
 
-      /* get data from tx_fifo */
+      /*get data from tx_fifo */
       temp_count = kfifo_out_locked(&ttysrf->tx_fifo,
 				    tx_buffer, TTYSRF_FIFO_SIZE,
 				    &ttysrf->fifo_lock);
+      /* TODO: mode this to SPI message proccess below */
       /* send data */
       tty_insert_flip_string(tty, tx_buffer, temp_count);
       tty_flip_buffer_push(tty);
       tty_kref_put(tty);
     }
+    else if ( gpio_get_value(ttysrf->gpio.irq_pin) ) {
+      /* TODO: Construct SPI message to read 1 byte */
+      dprintk ("%s() irq_pin HIGH!\n", __func__);
+    }
     else {
       set_current_state(TASK_INTERRUPTIBLE);
       schedule_timeout(usecs_to_jiffies(10000));
     }
+    /* TODO: process SPI Message */
   } while (!kthread_should_stop());
 
   return 0;
@@ -275,6 +284,8 @@ static int ttysrf_spi_probe(struct spi_device *spi)
   sema_init(&ttysrf->sem, 1);
   ttysrf->open_count = 0;
   ttysrf->spi_dev = spi;
+  ttysrf->gpio.irq_pin = gpio_irq_pin;
+
 
   /* TODO?: Do I need to create any buffer :s ?? */
   /* set driver user data */
@@ -288,14 +299,32 @@ static int ttysrf_spi_probe(struct spi_device *spi)
   }
 
   /* TODO: setup GPIO and Interrupt */
+  ret = gpio_request(ttysrf->gpio.irq_pin, "ttysrf/irq");
+  if (ret < 0) {
+    dprintk ("Unable to allocate GPIO%d (IRQ)",
+	     ttysrf->gpio.irq_pin);
+    ret = -EBUSY;
+    goto probe_error_1;
+  }
+  ret += gpio_export(ttysrf->gpio.irq_pin, 1);
+  ret += gpio_direction_input(ttysrf->gpio.irq_pin);
+  if (ret) {
+    dprintk ("Unable to configure GPIO%d (IRQ)",
+	     gpio_irq_pin);
+    ret = -EBUSY;
+    goto probe_error_2;
+  }
 
   /* set global pointer */
   ttysrf_saved = ttysrf;
 
   return 0;
 
+ probe_error_2:
+  /* release GPIO */
+  gpio_free (ttysrf->gpio.irq_pin);
  probe_error_1:
-  kfree(ttysrf);
+  ttysrf_free_device (ttysrf);
   return ret;
 }
 
@@ -305,7 +334,8 @@ static int ttysrf_spi_remove(struct spi_device *spi)
 {
   struct ttysrf_serial *ttysrf = spi_get_drvdata(spi);
   dprintk ("%s()\n", __func__);
-  /* TODO: free GPIOs and Interrupts */
+  /* free GPIOs and Interrupts */
+  gpio_free (ttysrf->gpio.irq_pin);
 
   /* release SPI device from BUS */
   //spi_unregister_device (spi);
@@ -523,3 +553,7 @@ MODULE_VERSION("0.1");
 
 module_param(debug, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(debug, "Enable debugging messages");
+module_param(gpio_irq_pin, int, S_IRUGO);
+MODULE_PARM_DESC(gpio_irq_pin, "GPIO irq pin number of the BCM processor."
+		 " Valid pin numbers are: 0, 1, 4, 8, 7, 9, 10, 11, 14, 15,"
+		 " 17, 18, 21, 22, 23, 24, 25, default 25");

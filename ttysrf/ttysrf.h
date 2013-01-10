@@ -49,6 +49,11 @@ struct ttysrf_serial {
   struct device *tty_dev;
   int minor;
 
+  struct {
+    int irq_pin;
+    int irq_num;
+  } gpio;
+
   int open_count;          /* number of times this port has been opened */
   struct semaphore sem;    /* locks this structure */
 };

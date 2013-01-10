@@ -23,12 +23,25 @@
 #ifndef _TTYSRF_H
 #define _TTYSRF_H
 
-#define TTYSRF_DRIVER_NAME  "ttysrf"
-#define TTYSRF_MINORS       1
+#define TTYSRF_DRIVER_NAME   "ttysrf"
+#define TTYSRF_MINORS        1
+
+/* SPI defines */
+#define TTYSRF_SPI_BUS       0
+#define TTYSRF_SPI_BUS_CS0   0
+#define TTYSRF_SPI_BUS_SPEED 1000000
+
+#define TTYSRF_FIFO_SIZE     4096
 
 struct ttysrf_serial {
-  struct tty_struct *tty;  /* pointer to the tty for this device */
+  /* our SPI device */
+  struct spi_device *spi_dev;
+
+  /* TTY Layer logic */
+  struct tty_port tty_port;
   struct device *tty_dev;
+  int minor;
+
   int open_count;          /* number of times this port has been opened */
   struct semaphore sem;    /* locks this structure */
 };

@@ -36,35 +36,35 @@
 #define TTYSRF_SPI_RX_SIZE   TTYSRF_SPI_TX_SIZE
 
 struct ttysrf_serial {
-  /* our SPI device */
-  struct spi_device *spi_dev;
-  struct task_struct *spi_task;
+	/* our SPI device */
+	struct spi_device *spi_dev;
+	struct task_struct *spi_task;
 
-  /* port specific data */
-  struct kfifo tx_fifo;
-  spinlock_t fifo_lock;
-  unsigned int signal_state;
-  unsigned char *tx_buffer;
-  unsigned char *rx_buffer;
-  int tx_len;
-  int rx_len;
-  struct spi_message spi_msg;
-  struct spi_transfer spi_xfer;
-  int spi_busy;
+	/* port specific data */
+	struct kfifo tx_fifo;
+	spinlock_t fifo_lock;
+	unsigned int signal_state;
+	unsigned char *tx_buffer;
+	unsigned char *rx_buffer;
+	int tx_len;
+	int rx_len;
+	struct spi_message spi_msg;
+	struct spi_transfer spi_xfer;
+	int spi_busy;
 
-  /* TTY Layer logic */
-  struct tty_port tty_port;
-  struct device *tty_dev;
-  int minor;
+	/* TTY Layer logic */
+	struct tty_port tty_port;
+	struct device *tty_dev;
+	int minor;
 
-  struct {
-    int irq_pin;
-    int irq_num;
-  } gpio;
+	struct {
+		int irq_pin;
+		int irq_num;
+	} gpio;
 
-  int open_count;          /* number of times this port has been opened */
-  struct semaphore sem;    /* locks this structure */
+	int open_count;		/* number of times this port has been opened */
+	struct semaphore sem;	/* locks this structure */
 };
 
-#endif /* #ifndef _TTYSRF_H */
+#endif				/* #ifndef _TTYSRF_H */
 /* EOF */

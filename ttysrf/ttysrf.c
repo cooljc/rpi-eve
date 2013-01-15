@@ -145,12 +145,27 @@ static int ttysrf_spi_thread (void *arg)
     if (isBusy == 0) {
       if (tx_fifo_len) {
 	unsigned char *tx_buffer = ttysrf->tx_buffer;
+	unsigned long flags;
+	unsigned char byte;
+	int loop;
+	int ret;
 
 	/*get data from tx_fifo */
-	ttysrf->tx_len = kfifo_out_locked(&ttysrf->tx_fifo,
-				      tx_buffer, TTYSRF_FIFO_SIZE,
-				      &ttysrf->fifo_lock);
-	/* TODO: format tx_buffer for "fe ff" */
+	ttysrf->tx_len = 0;
+	spin_lock_irqsave(&ttysrf->fifo_lock, flags);
+	for (loop=0; loop<tx_fifo_len; loop++) {
+	  ret = kfifo_get (&ttysrf->tx_fifo, &byte);
+	  if (ret > 0) {
+	    /* format tx_buffer for "fe ff" */
+	    if (byte == 0xfe || byte == 0xff) {
+	      *tx_buffer++ = 0xfe;
+	      ttysrf->tx_len++;
+	    }
+	    *tx_buffer++ = byte;
+	    ttysrf->tx_len++;
+	  }
+	}
+	spin_unlock_irqrestore(&ttysrf->fifo_lock, flags);
 	status = ttysrf_spi_send_msg (ttysrf);
       }
       else if ( gpio_get_value(ttysrf->gpio.irq_pin) ) {
@@ -434,6 +449,7 @@ static int ttysrf_spi_remove(struct spi_device *spi)
   return 0;
 }
 
+#if 0
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
 static int __init ttysrf_add_spi_device_to_bus(void)
@@ -504,6 +520,13 @@ static int __init ttysrf_add_spi_device_to_bus(void)
 
   return status;
 }
+#endif
+
+static const struct spi_device_id ttysrf_id_table[] = {
+	{"ttysrf", 0},
+	{ }
+};
+MODULE_DEVICE_TABLE(spi, ttysrf_id_table);
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
@@ -514,6 +537,7 @@ static struct spi_driver ttysrf_spi_driver = {
   },
   .probe  = ttysrf_spi_probe,
   .remove = __devexit_p(ttysrf_spi_remove),
+  .id_table = ttysrf_id_table,
 };
 
 /* ------------------------------------------------------------------ */
@@ -528,6 +552,7 @@ static int __init ttysrf_init_spi(void)
     return error;
   }
 
+#if 0
   /* in a normal world we would do this in the board_init for the chip
    * but because this is an experimental driver we force it here */
   error = ttysrf_add_spi_device_to_bus();
@@ -536,6 +561,7 @@ static int __init ttysrf_init_spi(void)
     spi_unregister_driver(&ttysrf_spi_driver);
     return error;
   }
+#endif
 
   return 0;
 }

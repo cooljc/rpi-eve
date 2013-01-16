@@ -202,6 +202,52 @@ int test1 (int out_fd, int in_fd)
 	return error;
 }
 
+int test2 (int out_fd, int in_fd)
+{
+	unsigned char data_out[128];
+	unsigned char data_in[128];
+	int loop = 0;
+	int error = 0;
+	ssize_t in_size = 0;
+	int in_pos = 0;
+
+	/* fill data_out with test pattern */
+	for (loop=0; loop<128; loop++) {
+		data_out[loop] = loop;
+	}
+
+	/* clear data_in */
+	memset (data_in, 0, 128);
+
+	/* write data */
+	write (out_fd, data_out, 128);
+
+	/* read data in */
+	do {
+		in_size = read_timeout (in_fd, &data_in[in_pos], 128, 5);
+		in_pos += in_size;
+		if (in_size <= 0) 
+			break;
+	} while (in_pos < 128);
+
+	/* check results */
+	if (in_pos > 0) {
+		/* compare bytes */
+		for (loop=0; loop<128; loop++) {
+			if (data_out[loop] != data_in[loop]) {
+				fprintf (stderr, "Read: 0x%02x, Expected: 0x%02x\n",
+					data_in[loop], data_out[loop]);
+				error++;
+			}
+		}
+	}
+	else {
+		fprintf (stderr, "read(): timeout\n");
+		error = -1;
+	}
+	return error;
+}
+
 int main (int argc, char *argv[])
 {
 	int srf_fd = -1;
@@ -233,12 +279,33 @@ int main (int argc, char *argv[])
 		goto exit_3;
 	}
 
+	/* ------------------------------------------------
+	 * TEST 1:
+	 * This tests sending and receiving 1 byte at a time.
+	 * First we send from URF to SRF.
+	 * Second we send from SRF to URF */
+	fprintf (stderr, "********* TEST 1 **********\n");
 	fprintf (stderr, "URF -> SRF:\n");
 	errors = test1 (urf_fd, srf_fd);
 	fprintf (stderr, "Errors: %d\n", errors);
 
 	fprintf (stderr, "SRF -> URF:\n");
 	errors = test1 (srf_fd, urf_fd);
+	fprintf (stderr, "Errors: %d\n", errors);
+
+
+	/* ------------------------------------------------
+	 * TEST 2:
+	 * This tests sending and receiving 128 bytes at a time.
+	 * First we send from URF to SRF.
+	 * Second we send from SRF to URF */
+	fprintf (stderr, "********* TEST 2 **********\n");
+	fprintf (stderr, "URF -> SRF:\n");
+	errors = test2 (urf_fd, srf_fd);
+	fprintf (stderr, "Errors: %d\n", errors);
+
+	fprintf (stderr, "SRF -> URF:\n");
+	errors = test2 (srf_fd, urf_fd);
 	fprintf (stderr, "Errors: %d\n", errors);
 
 	/* done */

@@ -75,10 +75,13 @@ static void ttysrf_spi_complete(void *arg)
 
 	/* TODO: process data (fe ff) */
 	for (loop = 0; loop < ttysrf->tx_len; loop++) {
-		if (rx_buffer[loop] == 0xfe) {
-		} else if (rx_buffer[loop] == 0xff) {
+		if (rx_buffer[loop] == 0xfe && ttysrf->fe_flag == 0) {
+			ttysrf->fe_flag = 1;
+		} else if (rx_buffer[loop] == 0xff && ttysrf->fe_flag == 0) {
+			/* do nothing - no data */
 		} else {
 			tty_insert_flip_char(tty, rx_buffer[loop], TTY_NORMAL);
+			ttysrf->fe_flag = 0;
 		}
 		/*    tty_insert_flip_string(tty, rx_buffer, temp_count); */
 	}

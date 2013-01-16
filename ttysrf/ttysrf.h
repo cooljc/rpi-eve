@@ -51,6 +51,7 @@ struct ttysrf_serial {
 	struct spi_message spi_msg;
 	struct spi_transfer spi_xfer;
 	int spi_busy;
+	int fe_flag;
 
 	/* TTY Layer logic */
 	struct tty_port tty_port;

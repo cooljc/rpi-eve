@@ -33,6 +33,8 @@
 #include <linux/kfifo.h>
 #include <linux/kthread.h>
 #include <linux/gpio.h>
+#include <linux/interrupt.h>
+#include <linux/irq.h>
 
 #include "ttysrf.h"
 
@@ -178,7 +180,7 @@ static int ttysrf_spi_thread(void *arg)
 				ttysrf_spi_send_msg(ttysrf);
 			} else {
 				set_current_state(TASK_INTERRUPTIBLE);
-				schedule_timeout(usecs_to_jiffies(10000));
+				schedule();
 			}
 		} else {
 			/* delay a short time to wait for transfer to complete */
@@ -188,6 +190,15 @@ static int ttysrf_spi_thread(void *arg)
 	} while (!kthread_should_stop());
 
 	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+static irqreturn_t ttysrf_interrupt(int irq, void *data)
+{
+	struct ttysrf_serial *ttysrf = data;
+	wake_up_process(ttysrf->spi_task);
+	return IRQ_HANDLED;
 }
 
 /* ------------------------------------------------------------------ */
@@ -412,6 +423,10 @@ static int ttysrf_spi_probe(struct spi_device *spi)
 		ret = -EBUSY;
 		goto probe_error_2;
 	}
+	ret = request_irq(gpio_to_irq(ttysrf->gpio.irq_pin),
+			ttysrf_interrupt,
+			IRQF_TRIGGER_RISING, TTYSRF_DRIVER_NAME,
+			(void *)ttysrf);
 
 	/* set global pointer */
 	ttysrf_saved = ttysrf;
@@ -433,6 +448,7 @@ static int ttysrf_spi_remove(struct spi_device *spi)
 	struct ttysrf_serial *ttysrf = spi_get_drvdata(spi);
 	dprintk("%s()\n", __func__);
 	/* free GPIOs and Interrupts */
+	free_irq(gpio_to_irq(ttysrf->gpio.irq_pin), (void *)ttysrf);
 	gpio_free(ttysrf->gpio.irq_pin);
 
 	/* release SPI device from BUS */

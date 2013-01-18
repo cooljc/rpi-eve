@@ -18,7 +18,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301, USA.
  * 
- * 
+ * Some code is taken from:
+ * http://www.easysw.com/~mike/serial/serial.html
  */
 #include <stdlib.h>
 #include <stdio.h>   /* Standard input/output definitions */
@@ -35,94 +36,45 @@
 #define TTYSRF_DEV "/dev/ttySRF0"
 #define TTYURF_DEV "/dev/ttyACM0"
 
-ssize_t read_timeout (int fd, void *buf, size_t count, int timeout_s)
-{
-	fd_set rfds;
-	struct timeval tv;
-	int retval = 0;
-	ssize_t n = 0;
-
-	/* Wait up to five seconds. */
-	tv.tv_sec = timeout_s; /* timeout */
-	tv.tv_usec = 0;
-	/* Watch fd to see when it has input. */
-	FD_ZERO(&rfds);
-	FD_SET(fd, &rfds);
-
-	retval = select(fd+1, &rfds, NULL, NULL, &tv);
-	if (retval == -1) {
-		fprintf (stderr, "Error: select() returned -1!\n");
-		n = -1;
-	}
-	else if(retval) {
-		n =  read(fd, buf, count);
-	}
-	else {
-		n = -2;
-	}
-	return n;
-}
-
-/* 
+/* ------------------------------------------------------------------ *
  * we want to send commands and wait for the result + OK.
- */
+ * ------------------------------------------------------------------ */
 int send_AT_command (int fd, const char *command, char *result)
 {
-	fd_set rfds;
-	struct timeval tv;
-	int retval = 0;
-	char buf[64];
-	int pos = 0;
-  
-	/* clean buf */
-	memset (buf, 0, 64);
+	char buffer[255];  /* Input buffer */
+	char *bufptr;      /* Current char in buffer */
+	int  nbytes;       /* Number of bytes read */
+	int  tries;        /* Number of tries so far */
 
-	/* send command */
-	write (fd, command, strlen(command));
+	for (tries = 0; tries < 3; tries ++) {
+		/* send an AT command followed by a CR */
+		if (write(fd, command, strlen(command)) < strlen(command))
+			continue;
 
-	/* Wait up to five seconds. */
-	tv.tv_sec = 5; /* timeout */
-	tv.tv_usec = 0;
+		/* clear buffer */
+		memset (buffer, 0, 255);
 
-	while (1) {
-		/* Watch fd to see when it has input. */
-		FD_ZERO(&rfds);
-		FD_SET(fd, &rfds);
-
-		retval = select(fd+1, &rfds, NULL, NULL, &tv);
-		if (retval == -1) {
-			fprintf (stderr, "Error: select() returned -1!\n");
-			return -1;
-		}
-		else if(retval) {
-			char byte;
-			int n =  read(fd, &byte, 1);
-			if (n) {
-				//fprintf (stderr, "[%02x] %c\n", byte, byte);
-				buf[pos++] = byte;
+		/* read characters into our string buffer until we get a CR or NL */
+		bufptr = buffer;
+		while ((nbytes = read(fd, bufptr, buffer + sizeof(buffer) - bufptr - 1)) > 0) {
+			bufptr += nbytes;
+			if (strstr (buffer, "OK\r") != NULL) {
+				if (result != NULL) {
+					/* we should have: 
+					 * <command result> + <CR> + OK + <CR> 
+					 * Strip off the OK and 2 <CR> characters */
+					memcpy (result, &buffer[0], strlen(buffer)-4);
+				}
+				return (0);
 			}
 		}
-		else {
-			fprintf (stderr, "Timeout: waiting for data! (%s)\n", buf);
-			return -2;
-		}
+	}
 
-		/* look for "OK"+<CR> */
-		if ( strstr (buf, "OK\r") != NULL) {
-			//fprintf (stderr, "Found \"OK\\r\"!!\n");
-			/* copy data to result minus the "OK" */
-			if (result) {
-				/* we should have: 
-				 * <command result> + <CR> + OK + <CR> 
-				 * Strip off the OK and 2 <CR> characters */
-				memcpy (result, &buf[0], strlen(buf)-4);
-			}
-			break;
-		}
-	} /* end of while(1) */
-	return 0;
+	return (-1);
 }
 
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
 int get_version (int fd, const char *devname)
 {
 	int ret = 0;
@@ -147,34 +99,34 @@ int get_version (int fd, const char *devname)
 	return ret;
 }
 
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
 void set_port_options (int fd)
 {
 	/* set up serial port */
 	struct termios options;
+	fcntl(fd, F_SETFL, 0);
 
-	fcntl(fd, F_SETFL, FNDELAY); /* don't block if no data is available */
-	/* Get the current options for the port... */
+	/* get the current options */
 	tcgetattr(fd, &options);
+
 	/* Set the baud rates to 9600... */
 	cfsetispeed(&options, B9600);
 	cfsetospeed(&options, B9600);
-	/* Enable the receiver and set local mode... */
-	options.c_cflag |= (CLOCAL | CREAD);
 
-	options.c_cflag &= ~PARENB;
-	options.c_cflag &= ~CSTOPB;
-	options.c_cflag &= ~CSIZE;
-	options.c_cflag |= CS8;
-	/* disable hardware flow control */
-	//options.c_cflag &= ~CNEW_RTSCTS;
+	/* set raw input, 1 second timeout */
+	options.c_cflag     |= (CLOCAL | CREAD);
+	options.c_lflag     &= ~(ICANON | ECHO | ECHOE | ISIG);
+	options.c_oflag     &= ~OPOST;
+	options.c_cc[VMIN]  = 0;
+	options.c_cc[VTIME] = 30;
 
-	/* Set the new options for the port... */
+	/* set the options */
 	tcsetattr(fd, TCSANOW, &options);
-
-	/* flush buffers */
-	tcflush(fd, TCIOFLUSH);
 }
 
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
 int test1 (int out_fd, int in_fd)
 {
 	unsigned char data_out[1];
@@ -187,7 +139,7 @@ int test1 (int out_fd, int in_fd)
 		/* write one byte out */
 		write (out_fd, data_out, 1);
 		/* read one byte in */
-		if (read_timeout (in_fd, data_in, 1, 5) > 0) {
+		if (read(in_fd, data_in, 1) > 0) {
 			/* compare byte */
 			if (data_out[0] != data_in[0]) {
 				fprintf (stderr, "Read: 0x%02x, Expected: 0x%02x\n",
@@ -202,6 +154,8 @@ int test1 (int out_fd, int in_fd)
 	return error;
 }
 
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
 int test2 (int out_fd, int in_fd)
 {
 	unsigned char data_out[128];
@@ -224,7 +178,7 @@ int test2 (int out_fd, int in_fd)
 
 	/* read data in */
 	do {
-		in_size = read_timeout (in_fd, &data_in[in_pos], 128, 5);
+		in_size = read(in_fd, &data_in[in_pos], 128);
 		in_pos += in_size;
 		if (in_size <= 0) 
 			break;
@@ -248,6 +202,8 @@ int test2 (int out_fd, int in_fd)
 	return error;
 }
 
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
 int main (int argc, char *argv[])
 {
 	int srf_fd = -1;

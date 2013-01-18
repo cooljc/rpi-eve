@@ -27,8 +27,9 @@ RM	= rm -f
 SRCS	= $(TARGET).c
 OBJS	= $(SRCS:%.c=%.o)
 
-CFLAGS	= -Wall -c -o
-LFLAGS	= -Wall -o
+DEBUG	= -g
+CFLAGS	= -Wall $(DEBUG) -c -o
+LFLAGS	= -Wall $(DEBUG) -o
 
 $(TARGET): $(OBJS)
 	$(CC) $(LFLAGS) $@ $(OBJS)

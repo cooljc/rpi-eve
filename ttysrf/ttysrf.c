@@ -408,7 +408,7 @@ static int ttysrf_spi_probe(struct spi_device *spi)
 		goto probe_error_1;
 	}
 
-	/* TODO: setup GPIO and Interrupt */
+	/* setup GPIO and Interrupt */
 	ret = gpio_request(ttysrf->gpio.irq_pin, "ttysrf/irq");
 	if (ret < 0) {
 		dprintk("Unable to allocate GPIO%d (IRQ)",
@@ -451,92 +451,18 @@ static int ttysrf_spi_remove(struct spi_device *spi)
 	free_irq(gpio_to_irq(ttysrf->gpio.irq_pin), (void *)ttysrf);
 	gpio_free(ttysrf->gpio.irq_pin);
 
-	/* release SPI device from BUS */
-	/*spi_unregister_device (spi); */
-	/*spi_dev_put (spi); */
-
 	/* free allocations */
 	ttysrf_free_device(ttysrf);
 	ttysrf_saved = NULL;
 	return 0;
 }
 
-#if 0
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
-static int __init ttysrf_add_spi_device_to_bus(void)
-{
-	struct spi_master *spi_master;
-	struct spi_device *spi_device;
-	struct device *pdev;
-	char buff[64];
-	int status = 0;
-
-	spi_master = spi_busnum_to_master(TTYSRF_SPI_BUS);
-	if (!spi_master) {
-		dprintk("spi_busnum_to_master(%d) returned NULL\n",
-			TTYSRF_SPI_BUS);
-		return -1;
-	}
-
-	spi_device = spi_alloc_device(spi_master);
-	if (!spi_device) {
-		put_device(&spi_master->dev);
-		dprintk("spi_alloc_device() failed\n");
-		return -1;
-	}
-
-	spi_device->chip_select = TTYSRF_SPI_BUS_CS0;
-
-	/* Check whether this SPI bus.cs is already claimed */
-	snprintf(buff, sizeof(buff), "%s.%u",
-		 dev_name(&spi_device->master->dev), spi_device->chip_select);
-	dprintk("buff = %s\n", buff);
-
-	pdev = bus_find_device_by_name(spi_device->dev.bus, NULL, buff);
-	if (pdev) {
-		/* We are not going to use this spi_device, so free it */
-		spi_dev_put(spi_device);
-		dprintk("pdev = true\n");
-		/*
-		 * There is already a device configured for this bus.cs
-		 * It is okay if it us, otherwise complain and fail.
-		 */
-		if (pdev->driver && pdev->driver->name &&
-		    strcmp(TTYSRF_DRIVER_NAME, pdev->driver->name)) {
-			dprintk("Driver [%s] already registered for %s\n",
-				pdev->driver->name, buff);
-			status = -1;
-		}
-	} else {
-		spi_device->max_speed_hz = TTYSRF_SPI_BUS_SPEED;
-		spi_device->mode = SPI_MODE_0;
-		spi_device->bits_per_word = 8;
-		spi_device->irq = -1;
-		spi_device->controller_state = NULL;
-		spi_device->controller_data = NULL;
-		strlcpy(spi_device->modalias, TTYSRF_DRIVER_NAME,
-			SPI_NAME_SIZE);
-
-		/* This will force the SPI probe callback */
-		status = spi_add_device(spi_device);
-		if (status < 0) {
-			spi_dev_put(spi_device);
-			dprintk("spi_add_device() failed: %d\n", status);
-		}
-	}
-
-	put_device(&spi_master->dev);
-
-	return status;
-}
-#endif
-
 static const struct spi_device_id ttysrf_id_table[] = {
 	{"ttysrf", 0},
 	{}
 };
-
 MODULE_DEVICE_TABLE(spi, ttysrf_id_table);
 
 /* ------------------------------------------------------------------ */
@@ -562,17 +488,6 @@ static int __init ttysrf_init_spi(void)
 		dprintk("spi_register_driver() failed %d\n", error);
 		return error;
 	}
-#if 0
-	/* in a normal world we would do this in the board_init for the chip
-	 * but because this is an experimental driver we force it here */
-	error = ttysrf_add_spi_device_to_bus();
-	if (error < 0) {
-		dprintk("evesrf_add_to_bus() failed\n");
-		spi_unregister_driver(&ttysrf_spi_driver);
-		return error;
-	}
-#endif
-
 	return 0;
 }
 

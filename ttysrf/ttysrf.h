@@ -32,7 +32,7 @@
 #define TTYSRF_SPI_BUS_SPEED 100000
 
 #define TTYSRF_FIFO_SIZE     1024
-#define TTYSRF_SPI_TX_SIZE   TTYSRF_FIFO_SIZE
+#define TTYSRF_SPI_TX_SIZE   246 /* TODO: Confirm this */
 #define TTYSRF_SPI_RX_SIZE   TTYSRF_SPI_TX_SIZE
 
 struct ttysrf_serial {
@@ -50,7 +50,7 @@ struct ttysrf_serial {
 	int rx_len;
 	struct spi_message spi_msg;
 	struct spi_transfer spi_xfer;
-	int spi_busy;
+	struct semaphore spi_busy;   /* locks spi thread while busy */
 	int fe_flag;
 
 	/* TTY Layer logic */
@@ -62,9 +62,6 @@ struct ttysrf_serial {
 		int irq_pin;
 		int irq_num;
 	} gpio;
-
-	int open_count;		/* number of times this port has been opened */
-	struct semaphore sem;	/* locks this structure */
 };
 
 #endif				/* #ifndef _TTYSRF_H */

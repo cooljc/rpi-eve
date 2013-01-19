@@ -71,6 +71,8 @@ static void ttysrf_spi_complete(void *arg)
 	int loop = 0;
 
 	tty = tty_port_tty_get(&ttysrf->tty_port);
+	if (!tty)
+		goto complete_exit;
 	rx_buffer = ttysrf->rx_buffer;
 
 	/* process data (fe ff) */
@@ -87,7 +89,7 @@ static void ttysrf_spi_complete(void *arg)
 	}
 	tty_flip_buffer_push(tty);
 	tty_kref_put(tty);
-
+complete_exit:
 	/* finished this transaction. release semaphore */
 	up(&ttysrf->spi_busy);
 
@@ -249,13 +251,6 @@ static int ttysrf_write_room(struct tty_struct *tty)
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
-static void ttysrf_set_termios(struct tty_struct *tty,
-			       struct ktermios *old_termios)
-{
-}
-
-/* ------------------------------------------------------------------ */
-/* ------------------------------------------------------------------ */
 static int ttysrf_port_activate(struct tty_port *port, struct tty_struct *tty)
 {
 	struct ttysrf_serial *ttysrf =
@@ -307,7 +302,6 @@ static struct tty_operations ttysrf_serial_ops = {
 	.close = ttysrf_close,
 	.write = ttysrf_write,
 	.write_room = ttysrf_write_room,
-	.set_termios = ttysrf_set_termios,
 };
 
 /* ------------------------------------------------------------------ */

@@ -32,9 +32,25 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 
+#define ENABLE_TEST1
+#define ENABLE_TEST2
+#define ENABLE_TEST3
 
 #define TTYSRF_DEV "/dev/ttySRF0"
 #define TTYURF_DEV "/dev/ttyACM0"
+
+#define TEST3_FILE  "Tux.png"
+
+#define min(a,b) ((a)<(b)?(a):(b))
+
+void print_bytes (char *buf)
+{
+	int loop = 0;
+	for (loop=0; loop<strlen(buf); loop++) {
+		fprintf (stderr, "[%02x]", buf[loop]);
+	}
+	fprintf (stderr, "\n");
+}
 
 /* ------------------------------------------------------------------ *
  * we want to send commands and wait for the result + OK.
@@ -45,6 +61,7 @@ int send_AT_command (int fd, const char *command, char *result)
 	char *bufptr;      /* Current char in buffer */
 	int  nbytes;       /* Number of bytes read */
 	int  tries;        /* Number of tries so far */
+	char ok[4] = {'O', 'K', 0x0d, 0};
 
 	for (tries = 0; tries < 3; tries ++) {
 		/* send an AT command followed by a CR */
@@ -58,7 +75,8 @@ int send_AT_command (int fd, const char *command, char *result)
 		bufptr = buffer;
 		while ((nbytes = read(fd, bufptr, buffer + sizeof(buffer) - bufptr - 1)) > 0) {
 			bufptr += nbytes;
-			if (strstr (buffer, "OK\r") != NULL) {
+			//print_bytes(buffer);
+			if (strstr (buffer, ok) != NULL) {
 				if (result != NULL) {
 					/* we should have: 
 					 * <command result> + <CR> + OK + <CR> 
@@ -108,16 +126,21 @@ void set_port_options (int fd)
 	fcntl(fd, F_SETFL, 0);
 
 	/* get the current options */
-	tcgetattr(fd, &options);
+	memset(&options, 0, sizeof(options));
 
 	/* Set the baud rates to 9600... */
 	cfsetispeed(&options, B9600);
 	cfsetospeed(&options, B9600);
 
-	/* set raw input, 1 second timeout */
-	options.c_cflag     |= (CLOCAL | CREAD);
+	/* set raw input, 3 second timeout */
+	options.c_cflag     = (CLOCAL | CREAD);
+	options.c_cflag     &= ~PARENB;
+	options.c_cflag     &= ~CSTOPB;
+	options.c_cflag     &= ~CSIZE;
+	options.c_cflag     |= CS8;
 	options.c_lflag     &= ~(ICANON | ECHO | ECHOE | ISIG);
-	options.c_oflag     &= ~OPOST;
+	options.c_oflag     &= ~(OPOST);
+	options.c_iflag     = (IGNPAR | IGNBRK);
 	options.c_cc[VMIN]  = 0;
 	options.c_cc[VTIME] = 30;
 
@@ -204,6 +227,98 @@ int test2 (int out_fd, int in_fd)
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
+int test3 (int out_fd, int in_fd)
+{
+	int fd = -1;
+	int ret = -1;
+	unsigned char *data_in;
+	unsigned char *data_out;
+	struct stat filestat;
+	int test_finished = 0;
+	int out_pos = 0;
+	int in_pos = 0;
+	int filesize = 0;
+	int loop = 0;
+	int errors = 0;
+
+	/* Open test file for transfer */
+	fd = open(TEST3_FILE, O_RDWR);
+	if (fd < 0) {
+		fprintf (stderr, "Error: Failed to open file: %s\n", TEST3_FILE);
+		return ret;
+	}
+	/* get file stats */
+	if (fstat(fd, &filestat) < 0) {
+		fprintf (stderr, "Error: Failed to stat file: %s\n", TEST3_FILE);
+		goto test3_exit_1;
+	}
+	filesize = (int)filestat.st_size;
+	fprintf (stderr, "filestat.st_size=%d\n", filesize);
+
+	/* allocate memory for in and out data */
+	data_out = malloc(filestat.st_size);
+	if (data_out == NULL) {
+		fprintf (stderr, "Error: Failed to allocate memory for data_out\n");
+		goto test3_exit_1;
+	}
+	data_in = malloc(filestat.st_size);
+	if (data_in == NULL) {
+		fprintf (stderr, "Error: Failed to allocate memory for data_in\n");
+		goto test3_exit_2;
+	}
+
+	/* set memory to zero */
+	memset(data_out, 0, filestat.st_size);
+	memset(data_in, 0, filestat.st_size);
+
+	/* read file data into memory */
+	if (read(fd, data_out, filestat.st_size) != filestat.st_size) {
+		fprintf (stderr, "Error: Failed to read file into memory!\n");
+		goto test3_exit_3;
+	}
+
+	fprintf (stderr, "Sending...\n");
+
+	/* send/receive data */
+	do {
+		int write_size = 0;
+		int read_size = 0;
+		if (out_pos < filesize ) {
+			write_size = min ((filesize-out_pos), 200);
+			out_pos += write(out_fd, &data_out[out_pos], write_size);
+		}
+		/* allow read to catch up.. */
+		while (read_size < write_size) {
+			read_size += read (in_fd, &data_in[in_pos+read_size], write_size);
+		}
+		in_pos += read_size;
+		fprintf (stderr, "out_pos=%d, in_pos=%d\r", out_pos, in_pos);
+		if (in_pos >= filesize && out_pos >= filesize) {
+			test_finished = 1;
+			fprintf (stderr, "\n");
+		}
+	} while (!test_finished);
+
+	/* compare memory */
+	for (loop=0; loop<filestat.st_size; loop++) {
+		if (data_out[loop] != data_in[loop]) {
+			errors += 1;
+		}
+	}
+	ret = errors;
+
+	/* Clean up */
+test3_exit_3:
+	free(data_in);
+test3_exit_2:
+	free(data_out);
+test3_exit_1:
+	close(fd);
+	return ret;
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
 int main (int argc, char *argv[])
 {
 	int srf_fd = -1;
@@ -235,6 +350,7 @@ int main (int argc, char *argv[])
 		goto exit_3;
 	}
 
+#ifdef ENABLE_TEST1
 	/* ------------------------------------------------
 	 * TEST 1:
 	 * This tests sending and receiving 1 byte at a time.
@@ -248,8 +364,10 @@ int main (int argc, char *argv[])
 	fprintf (stderr, "SRF -> URF:\n");
 	errors = test1 (srf_fd, urf_fd);
 	fprintf (stderr, "Errors: %d\n", errors);
+#endif
 
 
+#ifdef ENABLE_TEST2
 	/* ------------------------------------------------
 	 * TEST 2:
 	 * This tests sending and receiving 128 bytes at a time.
@@ -263,7 +381,23 @@ int main (int argc, char *argv[])
 	fprintf (stderr, "SRF -> URF:\n");
 	errors = test2 (srf_fd, urf_fd);
 	fprintf (stderr, "Errors: %d\n", errors);
+#endif
 
+#ifdef ENABLE_TEST3
+	/* ------------------------------------------------
+	 * TEST 3:
+	 * This test opens a file and sends it 200 bytes at a time.
+	 * First we send from URF to SRF.
+	 * Second we send from SRF to URF */
+	fprintf (stderr, "********* TEST 3 **********\n");
+	fprintf (stderr, "URF -> SRF:\n");
+	errors = test3 (urf_fd, srf_fd);
+	fprintf (stderr, "Errors: %d\n", errors);
+
+	fprintf (stderr, "SRF -> URF:\n");
+	errors = test3 (srf_fd, urf_fd);
+	fprintf (stderr, "Errors: %d\n", errors);
+#endif
 	/* done */
 exit_3:
 	close (urf_fd);

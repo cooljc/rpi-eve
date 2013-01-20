@@ -53,7 +53,7 @@
  * loaded */
 /* ------------------------------------------------------------------ */
 /* enable debugging messages */
-static int debug = 1;
+static int debug = 0;
 /* set the default GPIO irq pin */
 static int gpio_irq_pin = 25;
 
@@ -141,8 +141,9 @@ static int ttysrf_spi_prep_tx (struct ttysrf_serial * ttysrf)
 	int loop;
 	int ret;
 
-	temp_count = min(tx_fifo_len, TTYSRF_SPI_TX_SIZE);
-
+	temp_count = min(tx_fifo_len, TTYSRF_SPI_TX_SIZE-1);
+	dprintk ("%s(): fifo_len = %d, temp_count = %d\n", 
+		__func__, tx_fifo_len, temp_count);
 	/*get data from tx_fifo */
 	ttysrf->tx_len = 0;
 	spin_lock_irqsave(&ttysrf->fifo_lock, flags);
@@ -153,11 +154,11 @@ static int ttysrf_spi_prep_tx (struct ttysrf_serial * ttysrf)
 			if (byte == 0xfe || byte == 0xff) {
 				*tx_buffer++ = 0xfe;
 				ttysrf->tx_len++;
-				/* TODO:
-				 * because we are adding an
-				 * extra byte we need to reduce
-				 * temp_count to prevent overflow
+				/* because we are adding an
+				 * extra byte we make sure we don't
+				 * overflow tx_buffer.
 				 */
+				loop++;
 			}
 			*tx_buffer++ = byte;
 			ttysrf->tx_len++;

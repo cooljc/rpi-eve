@@ -32,7 +32,7 @@
 #define TTYSRF_SPI_BUS_SPEED 100000
 
 #define TTYSRF_FIFO_SIZE     1024
-#define TTYSRF_SPI_TX_SIZE   246 /* TODO: Confirm this */
+#define TTYSRF_SPI_TX_SIZE   64 /* TODO: Confirm this */
 #define TTYSRF_SPI_RX_SIZE   TTYSRF_SPI_TX_SIZE
 
 struct ttysrf_serial {

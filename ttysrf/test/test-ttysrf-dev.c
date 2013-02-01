@@ -73,7 +73,8 @@ int send_AT_command (int fd, const char *command, char *result)
 
 		/* read characters into our string buffer until we get a CR or NL */
 		bufptr = buffer;
-		while ((nbytes = read(fd, bufptr, buffer + sizeof(buffer) - bufptr - 1)) > 0) {
+		nbytes = read(fd, bufptr, sizeof(buffer));
+		do {
 			bufptr += nbytes;
 			//print_bytes(buffer);
 			if (strstr (buffer, ok) != NULL) {
@@ -85,7 +86,8 @@ int send_AT_command (int fd, const char *command, char *result)
 				}
 				return (0);
 			}
-		}
+		} while ((nbytes = read(fd, bufptr, buffer + sizeof(buffer) - bufptr - 1)) > 0);
+
 	}
 
 	return (-1);

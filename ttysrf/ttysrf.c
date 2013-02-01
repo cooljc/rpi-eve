@@ -63,18 +63,43 @@ static struct lock_class_key ttysrf_spi_key;
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
+static void ttysrf_push_rx_to_tty(struct ttysrf_serial *ttysrf)
+{
+	struct tty_struct *tty;
+	unsigned long flags = 0;
+	unsigned char byte = 0;
+
+	/* check rx fifo has data to send */
+	if (kfifo_len(&ttysrf->rx_fifo)) {
+		dprintk("%s(): data to send!\n", __func__);
+		/* get tty */
+		tty = tty_port_tty_get(&ttysrf->tty_port);
+		if (!tty)
+			return;
+		spin_lock_irqsave(&ttysrf->fifo_lock, flags);
+		do {
+			if (kfifo_get(&ttysrf->rx_fifo, &byte) > 0) {
+				tty_insert_flip_char(tty, byte, TTY_NORMAL);
+			}
+		} while (kfifo_len(&ttysrf->rx_fifo));
+		spin_unlock_irqrestore(&ttysrf->fifo_lock, flags);
+
+		tty_flip_buffer_push(tty);
+		tty_kref_put(tty);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
 static void ttysrf_spi_complete(void *arg)
 {
 	struct ttysrf_serial *ttysrf = arg;
-	struct tty_struct *tty;
 	unsigned char *rx_buffer;
+	unsigned long flags = 0;
 	int loop = 0;
 
-	tty = tty_port_tty_get(&ttysrf->tty_port);
-	if (!tty)
-		goto complete_exit;
 	rx_buffer = ttysrf->rx_buffer;
-
+	spin_lock_irqsave(&ttysrf->fifo_lock, flags);
 	/* process data (fe ff) */
 	for (loop = 0; loop < ttysrf->tx_len; loop++) {
 		if (rx_buffer[loop] == 0xfe && ttysrf->fe_flag == 0) {
@@ -82,17 +107,13 @@ static void ttysrf_spi_complete(void *arg)
 		} else if (rx_buffer[loop] == 0xff && ttysrf->fe_flag == 0) {
 			/* do nothing - no data */
 		} else {
-			tty_insert_flip_char(tty, rx_buffer[loop], TTY_NORMAL);
+			kfifo_put (&ttysrf->rx_fifo, &rx_buffer[loop]);
 			ttysrf->fe_flag = 0;
 		}
-		/*    tty_insert_flip_string(tty, rx_buffer, temp_count); */
 	}
-	tty_flip_buffer_push(tty);
-	tty_kref_put(tty);
-complete_exit:
+	spin_unlock_irqrestore(&ttysrf->fifo_lock, flags);
 	/* finished this transaction. release semaphore */
 	up(&ttysrf->spi_busy);
-
 }
 
 /* ------------------------------------------------------------------ */
@@ -187,10 +208,16 @@ static int ttysrf_spi_thread(void *arg)
 		} else {
 			/* release semaphore, nothing to do */
 			up(&ttysrf->spi_busy);
+			/* push data to tty */
+			ttysrf_push_rx_to_tty(ttysrf);
 			/* enter sleep state waiting for interrupt or send
 			 * request */
 			set_current_state(TASK_INTERRUPTIBLE);
 			schedule();
+		}
+
+		if (kfifo_len(&ttysrf->rx_fifo) >= 32) {
+			ttysrf_push_rx_to_tty(ttysrf);
 		}
 	} while (!kthread_should_stop());
 
@@ -246,7 +273,7 @@ static int ttysrf_write_room(struct tty_struct *tty)
 	int room = -EINVAL;
 
 	/* calculate how much room is left in the device */
-	room = TTYSRF_FIFO_SIZE - kfifo_len(&ttysrf->tx_fifo);
+	room = TTYSRF_TX_FIFO_SIZE - kfifo_len(&ttysrf->tx_fifo);
 	return room;
 }
 
@@ -312,6 +339,7 @@ static void ttysrf_free_port(struct ttysrf_serial *ttysrf)
 	if (ttysrf->tty_dev)
 		tty_unregister_device(ttysrf_tty_driver, ttysrf->minor);
 	kfifo_free(&ttysrf->tx_fifo);
+	kfifo_free(&ttysrf->rx_fifo);
 	kfree(ttysrf->tx_buffer);
 	kfree(ttysrf->rx_buffer);
 	kfree(ttysrf);
@@ -327,7 +355,12 @@ static int ttysrf_create_port(struct ttysrf_serial *ttysrf)
 	spin_lock_init(&ttysrf->fifo_lock);
 	lockdep_set_class_and_subclass(&ttysrf->fifo_lock, &ttysrf_spi_key, 0);
 
-	if (kfifo_alloc(&ttysrf->tx_fifo, TTYSRF_FIFO_SIZE, GFP_KERNEL)) {
+	if (kfifo_alloc(&ttysrf->tx_fifo, TTYSRF_TX_FIFO_SIZE, GFP_KERNEL)) {
+		ret = -ENOMEM;
+		goto error_ret;
+	}
+
+	if (kfifo_alloc(&ttysrf->rx_fifo, TTYSRF_RX_FIFO_SIZE, GFP_KERNEL)) {
 		ret = -ENOMEM;
 		goto error_ret;
 	}

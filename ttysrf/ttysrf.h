@@ -31,7 +31,8 @@
 #define TTYSRF_SPI_BUS_CS0   0
 #define TTYSRF_SPI_BUS_SPEED 100000
 
-#define TTYSRF_FIFO_SIZE     1024
+#define TTYSRF_TX_FIFO_SIZE  1024
+#define TTYSRF_RX_FIFO_SIZE  64
 #define TTYSRF_SPI_TX_SIZE   64 /* TODO: Confirm this */
 #define TTYSRF_SPI_RX_SIZE   TTYSRF_SPI_TX_SIZE
 
@@ -42,6 +43,7 @@ struct ttysrf_serial {
 
 	/* port specific data */
 	struct kfifo tx_fifo;
+	struct kfifo rx_fifo;
 	spinlock_t fifo_lock;
 	unsigned int signal_state;
 	unsigned char *tx_buffer;

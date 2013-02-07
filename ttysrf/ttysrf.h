@@ -54,6 +54,7 @@ struct ttysrf_serial {
 	struct spi_transfer spi_xfer;
 	struct semaphore spi_busy;   /* locks spi thread while busy */
 	int fe_flag;
+	int dev_open;
 
 	/* TTY Layer logic */
 	struct tty_port tty_port;

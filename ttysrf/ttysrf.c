@@ -229,7 +229,9 @@ static int ttysrf_spi_thread(void *arg)
 static irqreturn_t ttysrf_interrupt(int irq, void *data)
 {
 	struct ttysrf_serial *ttysrf = data;
-	wake_up_process(ttysrf->spi_task);
+	if (ttysrf->dev_open == 1) {
+		wake_up_process(ttysrf->spi_task);
+	}
 	return IRQ_HANDLED;
 }
 
@@ -238,6 +240,7 @@ static irqreturn_t ttysrf_interrupt(int irq, void *data)
 static int ttysrf_open(struct tty_struct *tty, struct file *file)
 {
 	struct ttysrf_serial *ttysrf = ttysrf_saved;	//tty->driver_data;
+	ttysrf->dev_open = 1;
 	return tty_port_open(&ttysrf->tty_port, tty, file);
 }
 
@@ -246,6 +249,7 @@ static int ttysrf_open(struct tty_struct *tty, struct file *file)
 static void ttysrf_close(struct tty_struct *tty, struct file *file)
 {
 	struct ttysrf_serial *ttysrf = tty->driver_data;
+	ttysrf->dev_open = 0;
 	tty_port_close(&ttysrf->tty_port, tty, file);
 }
 
